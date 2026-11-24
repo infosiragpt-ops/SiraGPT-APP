@@ -444,30 +444,44 @@ const CHROMATIC_LEXICON = [
 const BACKGROUND_SCOPE_RE = /\b(?:fondo|background|cielo|sky|escenario|pared|backdrop)\s*(?:de\s+color|en\s+color|color|en|a|to|in|is)?\s*$/i;
 const EYES_SCOPE_BEFORE_RE = /\b(?:ojos?|mirada|iris|eyes?)\s*(?:de\s+color|en\s+color|color|en|a|to|in)?\s*$/i;
 const EYES_SCOPE_AFTER_RE = /^\s*(?:eyes?|ojos?)\b/i;
-const ACCESSORY_SCOPE_RE = /\b(sombrero|gorra|casco|corona|collar|bufanda|gafas|lentes|camisa|camiseta|vestido|chaqueta|abrigo|traje|corbata|zapatos|marco|borde|hat|cap|helmet|crown|collar|scarf|glasses|sunglasses|shirt|t-shirt|dress|jacket|coat|suit|tie|shoes|frame|border)\s*(?:de\s+color|en\s+color|color|en|a)?\s*$/i;
+const ACCESSORY_SCOPE_RE = /\b(sombrero|gorra|casco|corona|collar|bufanda|gafas|lentes|camisa|camiseta|vestido|chaqueta|abrigo|traje|corbata|zapatos|marco|borde|hat|cap|helmet|crown|collar|scarf|glasses|sunglasses|shirt|t-shirt|dress|jacket|coat|suit|tie|shoes|frame|border)\s*(?:de\s+color|en\s+color|color|en|a|to|in)?\s*$/i;
+const OBJECT_SCOPE_RE = /\b(mesa|silla|sofa|sillon|cojin|almohada|puerta|ventana|auto|coche|carro|taza|botella|libro|flor|flores|alfombra|suelo|piso|techo|cortina|cortinas|escritorio|lampara|bolso|mochila|table|chair|sofa|couch|pillow|cushion|door|window|car|cup|mug|bottle|book|flower|flowers|rug|floor|ceiling|curtain|desk|lamp|bag)\s*(?:de\s+color|en\s+color|color|en|a|to|in)?\s*$/i;
 const LIGHTING_SCOPE_RE = /\b(?:luz|luces|iluminacion|neon|resplandor|lighting|glow)\s*(?:de\s+color|en\s+color|color|en|a)?\s*$/i;
 
 const ADDITIVE_PROP_PATTERNS = [
-  { id: 'hat', en: 'wearing a stylish hat', re: /\b(?:con\s+(?:un\s+)?sombrero|ponle\s+(?:un\s+)?sombrero|agregale\s+(?:un\s+)?sombrero|with\s+a\s+hat|wearing\s+a\s+hat)\b/i },
-  { id: 'cap', en: 'wearing a cap', re: /\b(?:con\s+(?:una\s+)?gorra|ponle\s+(?:una\s+)?gorra|with\s+a\s+cap)\b/i },
-  { id: 'glasses', en: 'wearing glasses/sunglasses', re: /\b(?:con\s+(?:unas\s+)?(?:gafas|lentes)(?:\s+de\s+sol)?|ponle\s+(?:unas\s+)?(?:gafas|lentes)(?:\s+de\s+sol)?|with\s+(?:sun)?glasses|wearing\s+(?:sun)?glasses)\b/i },
-  { id: 'crown', en: 'wearing a royal crown', re: /\b(?:con\s+(?:una\s+)?corona|ponle\s+(?:una\s+)?corona|with\s+a\s+crown|wearing\s+a\s+crown)\b/i },
-  { id: 'collar', en: 'wearing a collar', re: /\b(?:con\s+(?:un\s+)?collar|ponle\s+(?:un\s+)?collar|with\s+a\s+collar)\b/i },
-  { id: 'scarf', en: 'wearing a scarf', re: /\b(?:con\s+(?:una\s+)?bufanda|ponle\s+(?:una\s+)?bufanda|with\s+a\s+scarf)\b/i },
-  { id: 'suit', en: 'dressed in a tailored suit', re: /\b(?:con\s+(?:un\s+)?traje|vestid[oa]\s+de\s+traje|in\s+a\s+suit|wearing\s+a\s+suit)\b/i },
+  { id: 'hat', en: 'wearing a stylish hat', re: /\b(?:(?:con|ponle|agregale|anadele|y)\s+(?:un\s+)?sombrero|with\s+a\s+hat|wearing\s+a\s+hat)\b/i },
+  { id: 'cap', en: 'wearing a cap', re: /\b(?:(?:con|ponle|agregale|anadele|y)\s+(?:una\s+)?gorra|with\s+a\s+cap)\b/i },
+  { id: 'glasses', en: 'wearing glasses/sunglasses', re: /\b(?:(?:con|ponle|agregale|anadele|y)\s+(?:unas?\s+|unos?\s+)?(?:gafas|lentes)(?:\s+de\s+sol)?|with\s+(?:sun)?glasses|wearing\s+(?:sun)?glasses)\b/i },
+  { id: 'crown', en: 'wearing a royal crown', re: /\b(?:(?:con|ponle|agregale|anadele|y)\s+(?:una\s+)?corona|with\s+a\s+crown|wearing\s+a\s+crown)\b/i },
+  { id: 'collar', en: 'wearing a collar', re: /\b(?:(?:con|ponle|agregale|anadele|y)\s+(?:un\s+)?collar|with\s+a\s+collar)\b/i },
+  { id: 'scarf', en: 'wearing a scarf', re: /\b(?:(?:con|ponle|agregale|anadele|y)\s+(?:una\s+)?bufanda|with\s+a\s+scarf)\b/i },
+  { id: 'suit', en: 'dressed in a tailored suit', re: /\b(?:(?:con|ponle|y)\s+(?:un\s+)?traje|vestid[oa]\s+de\s+traje|in\s+a\s+suit|wearing\s+a\s+suit)\b/i },
+];
+
+const REMOVAL_PROP_PATTERNS = [
+  { id: 'hat', re: /\b(?:quit(?:a|ale|ar)\s+(?:el\s+|un\s+)?sombrero|sin\s+sombrero|remove\s+(?:the\s+)?hat|without\s+(?:a\s+)?hat)\b/i },
+  { id: 'cap', re: /\b(?:quit(?:a|ale|ar)\s+(?:la\s+|una\s+)?gorra|sin\s+gorra|remove\s+(?:the\s+)?cap|without\s+(?:a\s+)?cap)\b/i },
+  { id: 'glasses', re: /\b(?:quit(?:a|ale|ar)\s+(?:las\s+|los\s+)?(?:gafas|lentes)|sin\s+(?:gafas|lentes)|remove\s+(?:the\s+)?(?:sun)?glasses|without\s+(?:sun)?glasses)\b/i },
+  { id: 'crown', re: /\b(?:quit(?:a|ale|ar)\s+(?:la\s+|una\s+)?corona|sin\s+corona|remove\s+(?:the\s+)?crown|without\s+(?:a\s+)?crown)\b/i },
+  { id: 'collar', re: /\b(?:quit(?:a|ale|ar)\s+(?:el\s+|un\s+)?collar|sin\s+collar|remove\s+(?:the\s+)?collar|without\s+(?:a\s+)?collar)\b/i },
+  { id: 'scarf', re: /\b(?:quit(?:a|ale|ar)\s+(?:la\s+|una\s+)?bufanda|sin\s+bufanda|remove\s+(?:the\s+)?scarf|without\s+(?:a\s+)?scarf)\b/i },
+  { id: 'suit', re: /\b(?:quit(?:a|ale|ar)\s+(?:el\s+|un\s+)?traje|sin\s+traje|remove\s+(?:the\s+)?suit|without\s+(?:a\s+)?suit)\b/i },
 ];
 
 const ENVIRONMENT_DELTA_PATTERNS = [
-  { id: 'night', en: 'nighttime scene under moonlight/ambient night lighting', re: /\b(?:de\s+noche|en\s+la\s+noche|nocturn[oa]|at\s+night|nighttime)\b/i },
-  { id: 'sunset', en: 'warm golden sunset horizon lighting', re: /\b(?:al\s+atardecer|en\s+el\s+atardecer|puesta\s+de\s+sol|at\s+sunset|sunset\s+sky)\b/i },
-  { id: 'rain', en: 'atmospheric rain with wet reflective surfaces', re: /\b(?:bajo\s+la\s+lluvia|con\s+lluvia|lloviendo|in\s+the\s+rain|rainy)\b/i },
-  { id: 'snow', en: 'snowy winter setting with crisp snow', re: /\b(?:en\s+la\s+nieve|con\s+nieve|nevando|in\s+the\s+snow|snowy)\b/i },
-  { id: 'beach', en: 'coastal beach setting with ocean horizon', re: /\b(?:en\s+la\s+playa|frente\s+al\s+mar|on\s+the\s+beach|at\s+the\s+beach)\b/i },
-  { id: 'space', en: 'outer space cosmic backdrop', re: /\b(?:en\s+el\s+espacio|en\s+la\s+luna|in\s+outer\s+space|on\s+the\s+moon)\b/i },
+  { id: 'night', slot: 'time', en: 'nighttime scene under moonlight/ambient night lighting', re: /\b(?:de\s+noche|en\s+la\s+noche|nocturn[oa]|at\s+night|nighttime)\b/i },
+  { id: 'day', slot: 'time', en: 'bright natural daylight scene', re: /\b(?:de\s+dia|en\s+el\s+dia|a\s+plena\s+luz\s+del\s+dia|daytime|in\s+daylight)\b/i },
+  { id: 'sunset', slot: 'time', en: 'warm golden sunset horizon lighting', re: /\b(?:al\s+atardecer|en\s+el\s+atardecer|puesta\s+de\s+sol|at\s+sunset|sunset\s+sky)\b/i },
+  { id: 'sunrise', slot: 'time', en: 'soft early-morning sunrise light', re: /\b(?:al\s+amanecer|en\s+el\s+amanecer|at\s+sunrise|dawn\s+light)\b/i },
+  { id: 'rain', slot: 'weather', en: 'atmospheric rain with wet reflective surfaces', re: /\b(?:bajo\s+la\s+lluvia|con\s+lluvia|lloviendo|in\s+the\s+rain|rainy)\b/i },
+  { id: 'snow', slot: 'weather', en: 'snowy winter setting with crisp snow', re: /\b(?:en\s+la\s+nieve|con\s+nieve|nevando|in\s+the\s+snow|snowy)\b/i },
+  { id: 'clear_weather', slot: 'weather', en: 'clear dry weather under crisp light', re: /\b(?:sin\s+lluvia|sin\s+nieve|clima\s+despejado|clear\s+weather|sunny\s+clear\s+sky)\b/i },
+  { id: 'beach', slot: 'location', en: 'coastal beach setting with ocean horizon', re: /\b(?:en\s+la\s+playa|frente\s+al\s+mar|on\s+the\s+beach|at\s+the\s+beach)\b/i },
+  { id: 'space', slot: 'location', en: 'outer space cosmic backdrop', re: /\b(?:en\s+el\s+espacio|en\s+la\s+luna|in\s+outer\s+space|on\s+the\s+moon)\b/i },
 ];
 
 function classifyColorScope(normPrompt, matchIndex, matchLength) {
-  const before = normPrompt.slice(Math.max(0, matchIndex - 34), matchIndex);
+  const before = normPrompt.slice(Math.max(0, matchIndex - 38), matchIndex);
   const after = normPrompt.slice(matchIndex + matchLength, matchIndex + matchLength + 20);
   if (BACKGROUND_SCOPE_RE.test(before) && !/\bsin\s+fondo\b/i.test(before)) {
     return { scope: 'background', targetNoun: 'background' };
@@ -478,6 +492,10 @@ function classifyColorScope(normPrompt, matchIndex, matchLength) {
   const accMatch = before.match(ACCESSORY_SCOPE_RE);
   if (accMatch) {
     return { scope: 'accessory', targetNoun: accMatch[1] };
+  }
+  const objMatch = before.match(OBJECT_SCOPE_RE);
+  if (objMatch) {
+    return { scope: 'accessory', targetNoun: objMatch[1] };
   }
   if (LIGHTING_SCOPE_RE.test(before)) {
     return { scope: 'lighting', targetNoun: 'lighting' };
@@ -551,9 +569,24 @@ function extractChromaticAndTraitOverrides(prompt) {
     });
   }
 
-  // 3. Additive props / wardrobe deltas.
+  // 3. Additive props / wardrobe deltas and explicit removals.
+  const removedPropIds = new Set();
+  for (const removal of REMOVAL_PROP_PATTERNS) {
+    if (removal.re.test(norm)) {
+      removedPropIds.add(removal.id);
+      overrides.push({
+        kind: 'prop',
+        action: 'remove',
+        id: removal.id,
+        en: `without ${removal.id}`,
+        scope: 'accessory',
+        targetNoun: removal.id,
+        nonNatural: false,
+      });
+    }
+  }
   for (const prop of ADDITIVE_PROP_PATTERNS) {
-    if (prop.re.test(norm)) {
+    if (!removedPropIds.has(prop.id) && prop.re.test(norm)) {
       overrides.push({
         kind: 'prop',
         id: prop.id,
@@ -565,15 +598,17 @@ function extractChromaticAndTraitOverrides(prompt) {
     }
   }
 
-  // 4. Environment / time-of-day deltas.
+  // 4. Environment / time-of-day / weather / location deltas (slotted so
+  // "ahora de día" replaces "de noche" cleanly instead of stacking both).
   for (const envDelta of ENVIRONMENT_DELTA_PATTERNS) {
     if (envDelta.re.test(norm)) {
       overrides.push({
         kind: 'environment',
         id: envDelta.id,
+        slot: envDelta.slot || envDelta.id,
         en: envDelta.en,
         scope: 'environment',
-        targetNoun: 'environment',
+        targetNoun: envDelta.slot || 'environment',
         nonNatural: false,
       });
     }
@@ -783,10 +818,17 @@ function mergeOverrideChain(overrideLists) {
       if (!item || typeof item !== 'object' || !item.id || !item.en) continue;
       const slotKey = item.kind === 'color'
         ? `color:${item.scope || 'subject'}:${item.scope === 'accessory' ? (item.targetNoun || 'acc') : ''}`
-        : `${item.kind || 'trait'}:${item.id}`;
+        : item.kind === 'environment'
+          ? `environment:${item.slot || item.targetNoun || item.id}`
+          : `${item.kind || 'trait'}:${item.id}`;
+      if (item.action === 'remove') {
+        bySlot.delete(slotKey);
+        continue;
+      }
       bySlot.set(slotKey, {
         kind: item.kind || 'color',
         id: String(item.id),
+        ...(item.slot ? { slot: String(item.slot) } : {}),
         en: String(item.en),
         ...(item.hex ? { hex: String(item.hex) } : {}),
         ...(item.family ? { family: String(item.family) } : {}),

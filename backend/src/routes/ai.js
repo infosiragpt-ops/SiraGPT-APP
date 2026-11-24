@@ -10848,6 +10848,7 @@ router.post(
     body('imageCount').optional().isInt({ min: 1, max: 5 }).withMessage('Image count must be between 1 and 5'),
     body('target').optional().isString().isLength({ max: 120 }).withMessage('Edit target must be a short string'),
     body('selection').optional().custom((v) => v === null || typeof v === 'object').withMessage('Selection must be an object'),
+    body('replyToImage').optional().isBoolean().withMessage('replyToImage must be a boolean'),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'image_generation' }),
@@ -10893,7 +10894,8 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, referenceFileIds, documentFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
+      let { prompt, chatId, provider, model, fileId, referenceFileIds, documentFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background, replyToImage } = req.body;
+      const isReplyToImage = replyToImage === true;
       const originalAttachmentOrder = [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
       let attachedDocRecords = [];
       // Composer uploads put ALL attached IDs (including PDFs/DOCX/TXT) into
@@ -11060,7 +11062,10 @@ router.post(
       let historyAnchorSource = null;
       const modelSupportsPixelEdit = !grokImageRequested
         && imageEngine.canEditImage({ model, provider: engineProviderForPick(grokImageRequested ? 'xAI' : provider, model) });
-      if (sourceImages.length > 0 && !modelSupportsPixelEdit && isImplicitHistoryFollowup) {
+      const canPivotToVisualDnaReply = Boolean(
+        isReplyToImage && !maskDataUrl && !editSelection && !background
+      );
+      if (sourceImages.length > 0 && !modelSupportsPixelEdit && (isImplicitHistoryFollowup || canPivotToVisualDnaReply)) {
         historyAnchorSource = sourceImages[0];
         if (!explicitPromptAspect && !editWordedFrame && historyAnchorSource?.metadata?.aspectRatio) {
           aspectRatio = normalizeImageAspectRatio(historyAnchorSource.metadata.aspectRatio);
@@ -11228,7 +11233,11 @@ router.post(
           let editPrompt = operation === 'reframe'
             ? imageDirective.resolveReframeDirective(prompt, aspectRatio).prompt
             : imageDirective.resolveEditDirective(prompt, {
-              target: typeof editTarget === 'string' ? editTarget : undefined, selection: editSelection,
+              target: typeof editTarget === 'string' ? editTarget : undefined,
+              selection: editSelection,
+              hasMask: Boolean(maskDataUrl),
+              maskBounds: editCanvas?.maskBounds || null,
+              isReplyToImage,
             }).prompt;
           // Several inputs whose roles are certain (viewer-chosen canvas,
           // history canvas, ranked on evidence): name the canvas and the
@@ -11255,6 +11264,10 @@ router.post(
                 prisma,
                 documentFileIds,
                 chatPreValidated: Boolean(preValidatedChat),
+                hasMask: Boolean(maskDataUrl),
+                maskBounds: editCanvas?.maskBounds || null,
+                hasSelection: Boolean(editSelection),
+                isReplyToImage,
               });
               if (ragEdit && ragEdit.prompt) editPrompt = ragEdit.prompt;
               ragMeta = ragEdit || null;
@@ -11594,6 +11607,7 @@ router.post(
     body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).withMessage('Invalid aspect ratio'),
     body('resolution').optional().isIn(['360p', '480p', '720p', '1080p', '4k']).withMessage('Invalid resolution'),
     body('duration').optional().isInt({ min: 3, max: 15 }).withMessage('Invalid duration'),
+    body('target_duration').optional().isInt({ min: 3, max: 300 }).withMessage('Invalid target duration'),
     body('audio').optional().isBoolean().withMessage('Invalid audio option').toBoolean(),
     body('negative_prompt').optional().isString(),
     body('files').optional().isArray(),
@@ -11615,7 +11629,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model,
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, target_duration: explicitTargetDuration = null, audio = true, negative_prompt, files, image_url, image_urls, model,
         history: providedHistory = null, continuation = null, professionalize = true
       } = req.body;
       const userId = req.user.id;
@@ -11652,6 +11666,13 @@ router.post(
         && (!Number.isFinite(requestedDuration) || requestedDuration === 5)
           ? 8
           : duration;
+      let resolvedTargetDuration = null;
+      try {
+        const parsedTarget = require('../services/video-duration-planner').parseRequestedVideoDurationSeconds(prompt, explicitTargetDuration);
+        if (parsedTarget && parsedTarget > Number(effectiveDuration || 8)) {
+          resolvedTargetDuration = parsedTarget;
+        }
+      } catch (_) { /* keep single-clip duration */ }
 
       console.log('🎬 Video generation request:', {
         prompt,
@@ -11791,6 +11812,7 @@ router.post(
           aspect_ratio: effectiveAspectRatio,
           resolution,
           duration: effectiveDuration,
+          ...(resolvedTargetDuration ? { target_duration: resolvedTargetDuration } : {}),
           audio,
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),

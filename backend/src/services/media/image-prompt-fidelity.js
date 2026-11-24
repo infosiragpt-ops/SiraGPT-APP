@@ -160,6 +160,26 @@ const POSITIVE_NEGATION_RULES = [
     re: /\b(?:sin\s+marco|sin\s+bordes?|frameless|borderless)\b/gi,
     en: 'with a full-bleed borderless edge',
   },
+  {
+    re: /\b(?:sin\s+barba|without\s+a?\s*beard|clean[\s-]shaven)\b/gi,
+    en: 'clean-shaven with smooth facial skin',
+  },
+  {
+    re: /\b(?:sin\s+muebles|without\s+furniture|empty\s+room)\b/gi,
+    en: 'in a minimalist unfurnished open space',
+  },
+  {
+    re: /\b(?:sin\s+lluvia|without\s+rain|dry\s+weather)\b/gi,
+    en: 'in dry clear weather',
+  },
+  {
+    re: /\b(?:sin\s+sombras\s+duras|sin\s+sombras|without\s+(?:harsh\s+)?shadows)\b/gi,
+    en: 'under soft even diffused illumination',
+  },
+  {
+    re: /\b(?:sin\s+objetos?\s+en\s+el\s+fondo|fondo\s+limpio|clean\s+background)\b/gi,
+    en: 'against an uncluttered clean background',
+  },
 ];
 
 function rewriteNegationsPositively(text) {

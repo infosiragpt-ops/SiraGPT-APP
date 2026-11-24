@@ -3324,7 +3324,7 @@ class ApiClient {
     }
   }
   async generateImage(
-    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; referenceFileIds?: string[]; operation?: 'generate' | 'edit' | 'reframe'; background?: 'transparent'; aspectRatio?: string; quality?: string; imageCount?: number; selection?: { kind?: string; x: number; y: number; width: number; height: number }; maskDataUrl?: string },
+    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; referenceFileIds?: string[]; operation?: 'generate' | 'edit' | 'reframe'; background?: 'transparent'; aspectRatio?: string; quality?: string; imageCount?: number; selection?: { kind?: string; x: number; y: number; width: number; height: number }; maskDataUrl?: string; replyToImage?: boolean },
     options: { signal?: AbortSignal } = {},
   ) {
     const timeoutMs = 210000;
@@ -4639,6 +4639,7 @@ class ApiClient {
     aspect_ratio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9';
     resolution?: '480p' | '720p' | '1080p';
     duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30;
+    target_duration?: number;
     audio?: boolean;
     negative_prompt?: string;
     chatId?: string;

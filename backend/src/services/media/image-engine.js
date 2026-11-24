@@ -698,6 +698,15 @@ function canEditImage(spec = {}) {
   // Image generation-only endpoints cannot be repurposed as editors.
   if (route.provider === 'openai' && !/^(?:gpt-image|chatgpt-image)/i.test(route.model || '')) return false;
   if (route.provider === 'gemini' && !/^gemini.*image/i.test(route.model || '')) return false;
+  if (route.provider === 'openrouter' && route.model) {
+    // Parity with image-model-capabilities.js: text-to-image-only OpenRouter
+    // slugs (e.g. black-forest-labs/flux-1.1-pro) cannot accept image_url edit
+    // inputs and must pivot to Visual DNA generation on conversational replies.
+    try {
+      const { OPENROUTER_IMAGE_INPUT_RE } = require('./image-model-capabilities');
+      if (OPENROUTER_IMAGE_INPUT_RE && !OPENROUTER_IMAGE_INPUT_RE.test(route.model)) return false;
+    } catch (_) { /* keep default if capabilities module is unavailable */ }
+  }
   return true;
 }
 

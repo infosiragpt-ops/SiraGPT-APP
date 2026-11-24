@@ -1413,6 +1413,16 @@ async function directImagePrompt({
   //    subject + English scene specification FIRST for top CLIP/T5 attention weight,
   //    bounded within MAX_PROVIDER_PROMPT_CHARS.
   const tailBlocks = [];
+  let intentPlan = null;
+  try {
+    const { classifyImageIntent, buildStrictGenerationContract } = require('./image-intent-planner');
+    intentPlan = classifyImageIntent(rawUserPrompt || coreSubjectPart, {
+      hasSourceImage: Boolean(historyAnchorSource),
+      hasReferenceImages: Boolean(grounding.grounded),
+    });
+    const strictGenClause = buildStrictGenerationContract(intentPlan);
+    if (strictGenClause) tailBlocks.push(strictGenClause);
+  } catch (_) { /* optional planner */ }
   if (visualState.identityLockClause) {
     tailBlocks.push(visualState.identityLockClause);
   }
@@ -1497,6 +1507,10 @@ async function directImageEditPrompt({
   historyPrompts,
   chatPreValidated = false,
   lexicalOnly = false,
+  hasMask = false,
+  maskBounds = null,
+  hasSelection = false,
+  isReplyToImage = false,
 } = {}) {
   const baseEditPrompt = stripPreviousImageDirection(String(editPrompt || rawInstruction || '').trim());
   const intentSource = stripPreviousImageDirection(String(rawInstruction || baseEditPrompt).trim()) || baseEditPrompt;
@@ -1565,7 +1579,28 @@ async function directImageEditPrompt({
 
   const quotedTypography = extractQuotedTypography(intentSource);
   const editFidelityClause = compileEditFidelityClause(neutralizeNamedArtistImitation(intentSource).prompt || intentSource);
+  let editIntentPlan = null;
+  let strictEditContract = '';
+  try {
+    const { classifyImageIntent, buildStrictEditContract } = require('./image-intent-planner');
+    const { pickEditLanguage } = require('../agents/image-directive');
+    editIntentPlan = classifyImageIntent(intentSource, {
+      hasSourceImage: true,
+      hasMask: Boolean(hasMask),
+      hasSelection: Boolean(hasSelection),
+      isReplyToImage: Boolean(isReplyToImage),
+    });
+    strictEditContract = buildStrictEditContract(editIntentPlan, {
+      language: pickEditLanguage(intentSource),
+      hasMask: Boolean(hasMask),
+      maskBounds,
+    });
+  } catch (_) { /* optional planner */ }
+
   const extras = [];
+  if (strictEditContract) {
+    extras.push(strictEditContract);
+  }
   if (editFidelityClause) {
     extras.push(editFidelityClause);
   }
@@ -1593,6 +1628,8 @@ async function directImageEditPrompt({
     groundedSourcesCount: grounding.sources.length,
     artistGuardApplied: artistGuard.neutralized,
     quotedTypography,
+    intent: editIntentPlan?.intent || null,
+    strictness: editIntentPlan?.strictness || null,
     activeOverrides: visualState.activeOverrides || [],
     visualDna: sourceImage?.metadata?.visualDna || visualState.visualDna || null,
   };

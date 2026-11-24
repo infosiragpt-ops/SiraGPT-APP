@@ -150,6 +150,28 @@ import {
   ComposerDocumentRow,
 } from "@/components/chat/ComposerInlineDisplays"
 import {
+  ImageReplyBanner,
+  PinnedImagesBar,
+  type ComposerImageReplyTarget,
+} from "@/components/chat/image-action-menu"
+import { ImageForwardDialog } from "@/components/chat/ImageForwardDialog"
+import {
+  IMAGE_FORWARD_EVENT,
+  IMAGE_PRECISION_EDIT_EVENT,
+  IMAGE_REPLY_EVENT,
+  IMAGE_TO_VIDEO_EVENT,
+  formatVideoDurationEs,
+  type ChatImageActionPayload,
+  type ImageForwardEventDetail,
+  type ImageToVideoEventDetail,
+} from "@/lib/chat/image-actions"
+import {
+  PINNED_IMAGES_EVENT,
+  getPinnedImages,
+  removePinnedImage,
+  type PinnedChatImage,
+} from "@/lib/chat/pinned-images"
+import {
   ChatComposerPrimaryAction,
   ChatComposerSurface,
 } from "@/components/chat/ChatComposerSurface"
@@ -5281,6 +5303,7 @@ function ChatInterfaceContent() {
     addThesisMessage,
     selectedModel,
     createNewChat,
+    clearCurrentChat,
     setSelectedModel,
     selectedEffort,
     setSelectedEffort,
@@ -5864,6 +5887,115 @@ function ChatInterfaceContent() {
     window.addEventListener("siragpt:image-region-edit", onImageRegionEdit);
     return () => window.removeEventListener("siragpt:image-region-edit", onImageRegionEdit);
   }, [setUploadedFiles, setChatType]);
+
+  // WhatsApp-style image action menu listeners:
+  //   - Reply to image -> pull quoted image into composer for text-driven edits
+  //   - Precision edit -> open ImageWorkspace directly in millimeter brush mode
+  //   - Convert to video -> pull image into Video mode with seconds/minutes duration
+  //   - Forward image -> open in new chat or choose an existing chat
+  React.useEffect(() => {
+    const onImageReply = (event: Event) => {
+      const detail = (event as CustomEvent<ChatImageActionPayload>).detail;
+      if (!detail?.url) return;
+      setIsVideoGenerationActive(false);
+      setTargetVideoDurationSeconds(null);
+      setReplyImageTarget({ ...detail, intent: "edit" });
+      if (detail.aspectRatio && IMAGE_ASPECT_RATIO_OPTIONS.some((option) => option.value === detail.aspectRatio)) {
+        setSelectedImageAspectRatio(detail.aspectRatio as ImageAspectRatio);
+      }
+      toast.success("Respondiendo a esta imagen. Describe qué deseas cambiar o crear.");
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    };
+
+    const onImagePrecisionEdit = (event: Event) => {
+      const detail = (event as CustomEvent<ChatImageActionPayload>).detail;
+      if (!detail?.url) return;
+      setIsVideoGenerationActive(false);
+      setIsImageGenerationActive(true);
+      setChatType("image");
+      setImageWorkspaceLaunchOptions({ initialMode: "erase", initialEraseTool: "brush" });
+      setImageWorkspaceTarget({
+        id: detail.id || detail.fileId || detail.url,
+        fileId: detail.fileId,
+        url: detail.url,
+        name: detail.name || "Imagen.png",
+        chatId: detail.chatId || currentChatIdRef.current || undefined,
+        messageId: detail.messageId,
+        width: detail.width,
+        height: detail.height,
+        model: detail.model,
+        provider: detail.provider,
+        quality: detail.quality,
+        aspectRatio: detail.aspectRatio,
+      });
+    };
+
+    const onImageToVideo = (event: Event) => {
+      const detail = (event as CustomEvent<ImageToVideoEventDetail>).detail;
+      if (!detail?.url) return;
+      const requestedSeconds = Math.max(4, Math.min(300, Math.round(Number(detail.durationSeconds) || 8)));
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(true);
+      isVideoGenerationActiveRef.current = true;
+      setChatType("video");
+      const activeVidModel = selectedVideoModel.trim() || videoModelsForComposer[0]?.name || "";
+      const clampedSingle = clampVideoDuration(
+        Math.min(15, requestedSeconds),
+        resolveVideoDurationSpec(activeVidModel, (availableModels || []).find((m: any) => m?.name === activeVidModel)?.apiData?.fal),
+        undefined,
+        selectedVideoResolution,
+      );
+      if (clampedSingle != null) {
+        setSelectedVideoDuration(clampedSingle as VideoDuration);
+      }
+      setTargetVideoDurationSeconds(requestedSeconds);
+      setReplyImageTarget({ ...detail, intent: "video", videoDurationSeconds: requestedSeconds });
+      toast.success(`Imagen lista para convertir en video (${formatVideoDurationEs(requestedSeconds)}). Describe el movimiento y envía.`);
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    };
+
+    const onImageForward = (event: Event) => {
+      const detail = (event as CustomEvent<ImageForwardEventDetail>).detail;
+      if (!detail?.url) return;
+      if (detail.mode === "new-chat") {
+        clearCurrentChat();
+        setIsVideoGenerationActive(false);
+        setTargetVideoDurationSeconds(null);
+        setTimeout(() => {
+          setReplyImageTarget({ ...detail, intent: "edit" });
+          if (detail.fileId) {
+            setUploadedFiles([{
+              id: detail.fileId,
+              fileId: detail.fileId,
+              tempId: detail.fileId,
+              name: detail.name || "Imagen.png",
+              originalName: detail.name || "Imagen.png",
+              type: "image/png",
+              mimeType: "image/png",
+              url: detail.url,
+              preview: detail.url,
+              status: "completed",
+            }]);
+          }
+          textareaRef.current?.focus();
+        }, 0);
+        toast.success("Imagen lista en un nuevo chat.");
+        return;
+      }
+      setForwardImageTarget(detail);
+    };
+
+    window.addEventListener(IMAGE_REPLY_EVENT, onImageReply);
+    window.addEventListener(IMAGE_PRECISION_EDIT_EVENT, onImagePrecisionEdit);
+    window.addEventListener(IMAGE_TO_VIDEO_EVENT, onImageToVideo);
+    window.addEventListener(IMAGE_FORWARD_EVENT, onImageForward);
+    return () => {
+      window.removeEventListener(IMAGE_REPLY_EVENT, onImageReply);
+      window.removeEventListener(IMAGE_PRECISION_EDIT_EVENT, onImagePrecisionEdit);
+      window.removeEventListener(IMAGE_TO_VIDEO_EVENT, onImageToVideo);
+      window.removeEventListener(IMAGE_FORWARD_EVENT, onImageForward);
+    };
+  }, [availableModels, clearCurrentChat, selectedVideoModel, selectedVideoResolution, setChatType, setUploadedFiles, videoModelsForComposer]);
 
   // "Reuse-in-prompt" bridge — UnifiedDocumentViewer dispatches a
   // CustomEvent on the window when the user clicks the Reply icon in
@@ -7283,6 +7415,16 @@ But first, you need to connect your Spotify account securely using the button be
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
   const [imageWorkspaceTarget, setImageWorkspaceTarget] = React.useState<WorkspaceImage | null>(null);
+  const [imageWorkspaceLaunchOptions, setImageWorkspaceLaunchOptions] = React.useState<{
+    initialMode?: "edit" | "erase"
+    initialEraseTool?: "box" | "brush"
+  } | null>(null);
+  const [replyImageTarget, setReplyImageTarget] = React.useState<ComposerImageReplyTarget | null>(null);
+  const [targetVideoDurationSeconds, setTargetVideoDurationSeconds] = React.useState<number | null>(null);
+  const targetVideoDurationRef = React.useRef<number | null>(null);
+  targetVideoDurationRef.current = targetVideoDurationSeconds;
+  const [forwardImageTarget, setForwardImageTarget] = React.useState<ChatImageActionPayload | null>(null);
+  const [pinnedChatImages, setPinnedChatImages] = React.useState<PinnedChatImage[]>([]);
   const [imageMessageFocus, setImageMessageFocus] = React.useState<{ id: string; request: number } | null>(null);
   // Only parse the conversation's images while the workspace is open: messages
   // change identity on every streamed token flush.
@@ -7292,17 +7434,30 @@ But first, you need to connect your Spotify account securely using the button be
       : (EMPTY_WORKSPACE_IMAGES as WorkspaceImage[]),
     [imageWorkspaceTarget, currentChat?.messages, currentChat?.id],
   );
-  const openImageWorkspace = React.useCallback((asset: WorkspaceImage) => setImageWorkspaceTarget(asset), []);
+  const openImageWorkspace = React.useCallback((asset: WorkspaceImage) => {
+    setImageWorkspaceLaunchOptions(null);
+    setImageWorkspaceTarget(asset);
+  }, []);
   const focusImageMessage = React.useCallback((asset: WorkspaceImage) => {
     setImageWorkspaceTarget(null);
+    setImageWorkspaceLaunchOptions(null);
     if (asset.messageId) setImageMessageFocus({ id: asset.messageId, request: Date.now() });
   }, []);
   React.useEffect(() => {
     setImageWorkspaceTarget(null);
+    setImageWorkspaceLaunchOptions(null);
+    setReplyImageTarget(null);
+    setTargetVideoDurationSeconds(null);
+    setPinnedChatImages(getPinnedImages(currentChat?.id));
     const params = new URLSearchParams(window.location.search);
     const messageId = params.get('message');
     if (params.get('id') === currentChat?.id && messageId) setImageMessageFocus({ id: messageId, request: Date.now() });
   }, [currentChat?.id]);
+  React.useEffect(() => {
+    const syncPins = () => setPinnedChatImages(getPinnedImages(currentChatIdRef.current));
+    window.addEventListener(PINNED_IMAGES_EVENT, syncPins);
+    return () => window.removeEventListener(PINNED_IMAGES_EVENT, syncPins);
+  }, []);
   const [sourcesPanelData, setSourcesPanelData] = React.useState<{ sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string } | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
   const [sidePreviewAttachment, setSidePreviewAttachment] = React.useState<AttachmentLike | null>(null);
@@ -8738,6 +8893,63 @@ But first, you need to connect your Spotify account securely using the button be
       }
       contextTray={
         <>
+          {pinnedChatImages.length > 0 && (
+            <PinnedImagesBar
+              items={pinnedChatImages}
+              onReply={(item) => {
+                setIsVideoGenerationActive(false);
+                setTargetVideoDurationSeconds(null);
+                setReplyImageTarget({
+                  id: item.id,
+                  fileId: item.fileId,
+                  url: item.url,
+                  name: item.name,
+                  prompt: item.prompt,
+                  aspectRatio: item.aspectRatio,
+                  chatId: item.chatId,
+                  messageId: item.messageId,
+                  intent: "edit",
+                });
+                setTimeout(() => textareaRef.current?.focus(), 0);
+              }}
+              onUnpin={(imageId) => {
+                if (currentChat?.id) {
+                  setPinnedChatImages(removePinnedImage(currentChat.id, imageId));
+                  toast.success("Imagen desfijada");
+                }
+              }}
+            />
+          )}
+          {replyImageTarget && (
+            <ImageReplyBanner
+              target={replyImageTarget}
+              onClear={() => {
+                setReplyImageTarget(null);
+                setTargetVideoDurationSeconds(null);
+              }}
+              onPrecisionEdit={() => {
+                const target = replyImageTarget;
+                setIsVideoGenerationActive(false);
+                setIsImageGenerationActive(true);
+                setChatType("image");
+                setImageWorkspaceLaunchOptions({ initialMode: "erase", initialEraseTool: "brush" });
+                setImageWorkspaceTarget({
+                  id: target.id || target.fileId || target.url,
+                  fileId: target.fileId,
+                  url: target.url,
+                  name: target.name || "Imagen.png",
+                  chatId: target.chatId || currentChatIdRef.current || undefined,
+                  messageId: target.messageId,
+                  width: target.width,
+                  height: target.height,
+                  model: target.model,
+                  provider: target.provider,
+                  quality: target.quality,
+                  aspectRatio: target.aspectRatio,
+                });
+              }}
+            />
+          )}
           <ActiveOptionsDisplay
             uploadedFiles={uploadedFiles}
             removeFile={removeFile}
@@ -8819,8 +9031,12 @@ But first, you need to connect your Spotify account securely using the button be
             enterKeyHint="send"
             data-link-highlights={hasDetectedLinks ? "true" : undefined}
             placeholder={
-              isImageGenerationActive
-                ? tComposer("placeholderImage")
+              replyImageTarget?.intent === "video"
+                ? "Describe el movimiento y la escena del video a partir de esta imagen…"
+                : replyImageTarget?.intent === "edit"
+                  ? "Describe exactamente qué editar o cambiar en esta imagen…"
+                  : isImageGenerationActive
+                    ? tComposer("placeholderImage")
                 : isVideoGenerationActive
                   ? tComposer("placeholderVideo")
                   : isVoiceGenerationActive
@@ -10929,13 +11145,37 @@ But first, you need to connect your Spotify account securely using the button be
         } catch { /* client OCR is best-effort before the model answers */ }
       }
     }
+    const replyTargetSnapshot = replyImageTarget;
+    const targetVideoDurationSnapshot = targetVideoDurationSeconds;
     const markedImage = filesToSend.find((file: any) => file?.editRegion);
     const imageEditTarget = markedImage ? {
       fileId: String(markedImage.fileId || markedImage.id),
       operation: 'edit' as const,
       selection: { kind: 'box', ...markedImage.editRegion },
-    } : undefined;
+      ...(replyTargetSnapshot ? { replyToImage: true } : {}),
+    } : (replyTargetSnapshot?.intent === 'edit' && replyTargetSnapshot.fileId ? {
+      fileId: String(replyTargetSnapshot.fileId),
+      operation: 'edit' as const,
+      replyToImage: true,
+    } : undefined);
+    if (replyTargetSnapshot && replyTargetSnapshot.fileId && !filesToSend.some((file: any) => String(file?.fileId || file?.id || '') === String(replyTargetSnapshot.fileId))) {
+      filesToSend = [
+        {
+          id: replyTargetSnapshot.fileId,
+          fileId: replyTargetSnapshot.fileId,
+          name: replyTargetSnapshot.name || 'Imagen.png',
+          originalName: replyTargetSnapshot.name || 'Imagen.png',
+          type: 'image/png',
+          mimeType: 'image/png',
+          url: replyTargetSnapshot.url,
+          preview: replyTargetSnapshot.url,
+          status: 'completed',
+        },
+        ...filesToSend,
+      ];
+    }
     if (!queuedSend) { inputRef.current = ""; setInput(""); }
+    if (!queuedSend) { setReplyImageTarget(null); setTargetVideoDurationSeconds(null); }
     setSelectedMentionIds([]);
     setMentionMenuOpen(false);
     setMentionTrigger(null);
@@ -11408,7 +11648,28 @@ But first, you need to connect your Spotify account securely using the button be
         markQueuedSendSucceeded();
         return;
       }
-      if (isImageGenerationActive || chatType === 'image') {
+      if (replyTargetSnapshot?.intent === 'video') {
+        isGeneratingVideoRef.current = true;
+        isVideoGenerationActiveRef.current = true;
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        try {
+          await handleVideoGeneration(
+            msg,
+            collectUploadFileIds(filesToSend),
+            filesToSend,
+            targetVideoDurationSnapshot ?? replyTargetSnapshot.videoDurationSeconds ?? null,
+            replyTargetSnapshot.url ? [replyTargetSnapshot.url] : undefined,
+          );
+          markQueuedSendSucceeded();
+        } finally {
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
+        }
+        return;
+      }
+      if (isImageGenerationActive || chatType === 'image' || replyTargetSnapshot?.intent === 'edit') {
         // Even with the "Imágenes" composer mode on (it can be left sticky by
         // a previous generation), an ANALYSIS question about an image
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
@@ -11419,6 +11680,7 @@ But first, you need to connect your Spotify account securely using the button be
           return;
         }
       }
+      targetVideoDurationRef.current = targetVideoDurationSnapshot;
       if (isVideoGenerationActive || chatType === 'video') {
         isGeneratingVideoRef.current = true;
         isVideoGenerationActiveRef.current = true;
@@ -11428,6 +11690,7 @@ But first, you need to connect your Spotify account securely using the button be
           await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
           markQueuedSendSucceeded();
         } finally {
+          targetVideoDurationRef.current = null;
           isVideoGenerationActiveRef.current = true;
           setIsVideoGenerationActive(true);
           setChatType('video');
@@ -12069,7 +12332,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleImageGeneration = async (prompt: string, files?: string[], requestedModel?: string, editTarget?: { fileId: string; operation: 'edit'; selection: { kind: string; x: number; y: number; width: number; height: number } }): Promise<boolean> => {
+  const handleImageGeneration = async (prompt: string, files?: string[], requestedModel?: string, editTarget?: { fileId: string; operation: 'edit'; selection?: { kind: string; x: number; y: number; width: number; height: number }; replyToImage?: boolean }): Promise<boolean> => {
     let imageModelForRequest = (requestedModel || selectedImageModel || '').trim();
     let activeImageModel: any = null;
     try {
@@ -12304,7 +12567,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleVideoGeneration = async (prompt: string, files?: string[], sourceFiles: any[] = []) => {
+  const handleVideoGeneration = async (prompt: string, files?: string[], sourceFiles: any[] = [], explicitTargetDurationSeconds?: number | null, explicitSourceImageUrls?: string[]) => {
     const activeVideoModel = selectedVideoModel.trim() || videoModelsForComposer[0]?.name || "";
     if (!activeVideoModel) {
       toast.error('Activa un modelo VIDEO en Admin > AI Models antes de generar video.');
@@ -12351,13 +12614,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
     const promptResolution = extractRequestedVideoResolution(prompt);
     const promptAudio = extractRequestedVideoAudio(prompt);
-    const sourceImageUrls = (!files?.length && shouldUseLatestImageForVideo(prompt))
-      ? collectLatestGeneratedImageUrls(currentChat?.messages || [])
-      : [];
+    const sourceImageUrls = explicitSourceImageUrls?.length
+      ? explicitSourceImageUrls
+      : ((!files?.length && shouldUseLatestImageForVideo(prompt))
+        ? collectLatestGeneratedImageUrls(currentChat?.messages || [])
+        : []);
+    const clampedClipDuration = clampVideoDuration(selectedVideoDuration, resolveVideoDurationSpec(activeVideoModel || selectedVideoModel, (availableModels || []).find((model: any) => model?.name === (activeVideoModel || selectedVideoModel))?.apiData?.fal)) ?? selectedVideoDuration;
+    const resolvedExtendedDuration = explicitTargetDurationSeconds ?? targetVideoDurationRef.current;
     const videoOptions = {
       resolution: promptResolution || selectedVideoResolution,
       aspectRatio: promptAspectRatio || selectedVideoAspectRatio,
-      duration: clampVideoDuration(selectedVideoDuration, resolveVideoDurationSpec(activeVideoModel || selectedVideoModel, (availableModels || []).find((model: any) => model?.name === (activeVideoModel || selectedVideoModel))?.apiData?.fal)) ?? selectedVideoDuration,
+      duration: clampedClipDuration,
+      ...(resolvedExtendedDuration && resolvedExtendedDuration > clampedClipDuration ? { targetDuration: resolvedExtendedDuration } : {}),
       audio: promptAudio ?? selectedVideoAudio,
       model: activeVideoModel,
       signal: videoController.signal,
@@ -15269,18 +15537,80 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         )}
         {imageWorkspaceTarget && (
           <ImageWorkspace
-            key={`${imageWorkspaceTarget.chatId}:${imageWorkspaceTarget.id}`}
+            key={`${imageWorkspaceTarget.chatId}:${imageWorkspaceTarget.id}:${imageWorkspaceLaunchOptions?.initialMode || 'default'}`}
             assets={workspaceImages.some(image => image.id === imageWorkspaceTarget.id) ? workspaceImages : [...workspaceImages, imageWorkspaceTarget]}
             initialAssetId={imageWorkspaceTarget.id}
+            initialMode={imageWorkspaceLaunchOptions?.initialMode}
+            initialEraseTool={imageWorkspaceLaunchOptions?.initialEraseTool}
             // A picture clicked in the conversation opens as a plain
             // lightbox; the edit toolbar only comes with the image tool.
             viewOnly={!isImageGenerationActive}
             selectedModel={selectedImageModel ? { name: selectedImageModel, provider: providerForSelectedImageModel(selectedImageModel) } : undefined}
-            onClose={() => setImageWorkspaceTarget(null)}
+            onClose={() => {
+              setImageWorkspaceTarget(null);
+              setImageWorkspaceLaunchOptions(null);
+            }}
             onChanged={async () => { if (currentChatIdRef.current === imageWorkspaceTarget.chatId) await selectChat(imageWorkspaceTarget.chatId || ''); }}
             onViewChat={focusImageMessage}
           />
         )}
+        <ImageForwardDialog
+          image={forwardImageTarget}
+          chats={chats || []}
+          currentChatId={currentChat?.id}
+          onClose={() => setForwardImageTarget(null)}
+          onForwardToNewChat={(img) => {
+            setForwardImageTarget(null);
+            clearCurrentChat();
+            setIsVideoGenerationActive(false);
+            setTargetVideoDurationSeconds(null);
+            setTimeout(() => {
+              setReplyImageTarget({ ...img, intent: "edit" });
+              if (img.fileId) {
+                setUploadedFiles([{
+                  id: img.fileId,
+                  fileId: img.fileId,
+                  tempId: img.fileId,
+                  name: img.name || "Imagen.png",
+                  originalName: img.name || "Imagen.png",
+                  type: "image/png",
+                  mimeType: "image/png",
+                  url: img.url,
+                  preview: img.url,
+                  status: "completed",
+                }]);
+              }
+              textareaRef.current?.focus();
+            }, 0);
+            toast.success("Imagen reenviada a un nuevo chat.");
+          }}
+          onForwardToChat={async (targetChatId, img) => {
+            setForwardImageTarget(null);
+            await selectChat(targetChatId);
+            setTimeout(() => {
+              setReplyImageTarget({ ...img, chatId: targetChatId, intent: "edit" });
+              if (img.fileId) {
+                setUploadedFiles((prev: any[]) => [
+                  {
+                    id: img.fileId,
+                    fileId: img.fileId,
+                    tempId: img.fileId,
+                    name: img.name || "Imagen.png",
+                    originalName: img.name || "Imagen.png",
+                    type: "image/png",
+                    mimeType: "image/png",
+                    url: img.url,
+                    preview: img.url,
+                    status: "completed",
+                  },
+                  ...prev.filter((file: any) => String(file?.fileId || file?.id || "") !== String(img.fileId)),
+                ]);
+              }
+              textareaRef.current?.focus();
+            }, 60);
+            toast.success("Imagen reenviada al chat seleccionado.");
+          }}
+        />
         {previewUsesOverlay && documentPreviewUrl && (
           <DocumentPreview
             url={documentPreviewUrl}
