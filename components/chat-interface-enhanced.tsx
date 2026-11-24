@@ -2091,7 +2091,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
       <div
         role="list"
         aria-label="Archivos adjuntos"
-        className="flex flex-wrap items-end gap-x-2 gap-y-0.5"
+        className="flex flex-wrap items-end gap-2"
       >
         <AnimatePresence initial={false}>
         {uploadedFiles.map((file, index) => {
@@ -2154,7 +2154,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 isImage
                   ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
                   : isCompactDocument
-                    ? "w-full min-w-0"
+                    ? "w-full max-w-full min-w-0 sm:w-auto"
                     : isVideo
                       ? "w-[16.5rem] overflow-hidden rounded-[0.95rem] border-0 bg-transparent p-0 shadow-none"
                       : isAudio
