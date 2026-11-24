@@ -280,4 +280,51 @@ describe("WhatsApp-style ImageActionMenu & precision studio", () => {
     const box = maskBoundingBox([{ points: [{ x: 20, y: 30 }, { x: 40, y: 50 }], color: "#38BDF8", width: 4 }])
     expect(box).toEqual({ x: 18, y: 28, width: 24, height: 24 })
   })
+
+  it("uses SiraGPT liquid-glass surface classes and places assistant image menu outside-right when viewport allows", () => {
+    const originalInnerWidth = window.innerWidth
+    try {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 })
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+        width: 32,
+        height: 32,
+        x: 428,
+        y: 180,
+        left: 428,
+        top: 180,
+        right: 460,
+        bottom: 212,
+        toJSON() {},
+      })
+
+      const { unmount } = render(<ImageActionMenu image={sampleImage} preferOutsideRight />)
+      const trigger = screen.getByTestId("image-action-chevron")
+      expect(trigger.className).toContain("image-action-liquid-trigger")
+
+      fireEvent.click(trigger)
+      const menu = screen.getByTestId("image-action-menu")
+      expect(menu.className).toContain("image-action-liquid-menu")
+      expect(menu.className).not.toContain("/98")
+      expect(menu).toHaveAttribute("data-placement", "outside-right")
+      expect(menu.className).toContain("left-[calc(100%+18px)]")
+      unmount()
+
+      // Narrow viewport falls back cleanly inside-right
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 480 })
+      const { unmount: unmountNarrow } = render(<ImageActionMenu image={sampleImage} preferOutsideRight />)
+      fireEvent.click(screen.getByTestId("image-action-chevron"))
+      const narrowMenu = screen.getByTestId("image-action-menu")
+      expect(narrowMenu).toHaveAttribute("data-placement", "inside-right")
+      expect(narrowMenu.className).toContain("right-0")
+      unmountNarrow()
+
+      // Default (preferOutsideRight=false, right-aligned user images) stays inside-right even on wide screens
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 })
+      render(<ImageActionMenu image={sampleImage} />)
+      fireEvent.click(screen.getByTestId("image-action-chevron"))
+      expect(screen.getByTestId("image-action-menu")).toHaveAttribute("data-placement", "inside-right")
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth })
+    }
+  })
 })
