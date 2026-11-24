@@ -3,18 +3,29 @@
 /**
  * Workspace-jailed read / write / edit for SiraCode.
  *
- * Contract inspired by OpenCode file tools (anomalyco/opencode, MIT):
- * read(path, offset, limit), write(path, content), edit(path, old_str, new_str)
- * plus batched `multiedit` (edits[] applied atomically inside the jail).
- * Unique occurrence, size caps, binary reject, path jail. Native
- * CommonJS — not a copy of vendor/opencode read.ts / write.ts / edit.ts.
+ * Contract inspired by OpenCode file tools (anomalyco/opencode, MIT, commit
+ * 4cf9db957485dd51a5b195fb6e2c1e03d8da1107):
+ * read(path, offset, limit) with canonical look-alike recovery, fuzzy ENOENT
+ * suggestions & hierarchical AGENTS.md/CLAUDE.md discovery; write(path, content);
+ * edit(path, old_str, new_str) with graduated match ladder, LCS line-ending
+ * preservation & actionable missHint; plus batched atomic `multiedit`.
+ * Unique occurrence, size caps, binary reject, path jail. Native CommonJS —
+ * not a copy of vendor/opencode read.ts / write.ts / edit.ts.
  * No Effect, no LSP, no Snapshot, no OpenRouter.
  */
 
 const fs = require('fs/promises');
 const path = require('path');
-const { jailRealPath, MAX_FILE_BYTES } = require('./workspace');
+const { jailRealPath, isInsideRoot, MAX_FILE_BYTES } = require('./workspace');
 const { truncateToolResult } = require('./tool-result');
+const { applyEdit } = require('../codex/edit-matching');
+const {
+  canonicalFileName,
+  suggestSimilarNames,
+  formatMissingPathHint,
+  discoverScopedInstructions,
+  formatScopedInstructionsBlock,
+} = require('../codex/opencode-coding-intel');
 
 const DEFAULT_READ_LIMIT = 2_000;
 const MAX_LINE_CHARS = 2_000;
@@ -26,6 +37,21 @@ const BINARY_EXTS = new Set([
   '.zip', '.gz', '.7z', '.exe', '.dll', '.so', '.dylib',
   '.wasm', '.pyc', '.woff', '.woff2', '.bin', '.dat',
 ]);
+
+// Track surfaced scoped instruction files per session (or workspace) so each
+// nested AGENTS.md/CLAUDE.md is injected once cleanly without repetition.
+const scopedInstructionsSeen = new WeakMap();
+
+function seenInstructionsFor(ctx, workspace) {
+  const key = (ctx && ctx.session && typeof ctx.session === 'object') ? ctx.session : workspace;
+  if (!key || typeof key !== 'object') return new Set();
+  let set = scopedInstructionsSeen.get(key);
+  if (!set) {
+    set = new Set();
+    scopedInstructionsSeen.set(key, set);
+  }
+  return set;
+}
 
 const ERRORS = Object.freeze({
   validation_path: 'path es obligatorio',
@@ -56,8 +82,15 @@ function cap(text) {
   return truncateToolResult(text).content;
 }
 
-function toolError(code, message) {
-  return { ok: false, code, error: message, content: `ERROR: ${message}` };
+function toolError(code, message, extra = {}) {
+  const hint = typeof extra.hint === 'string' && extra.hint.trim() ? extra.hint.trim() : '';
+  const content = hint ? `ERROR: ${message}\n\n${hint}` : `ERROR: ${message}`;
+  const out = { ok: false, code, error: message, content };
+  if (hint) out.hint = hint;
+  if (Array.isArray(extra.suggestions) && extra.suggestions.length) {
+    out.suggestions = extra.suggestions;
+  }
+  return out;
 }
 
 function toolOk(content, extra = {}) {
@@ -153,6 +186,42 @@ function replaceUnique(haystack, oldStr, newStr, { replaceAll = false } = {}) {
   return haystack.slice(0, first) + newStr + haystack.slice(first + oldStr.length);
 }
 
+/**
+ * Applies a single edit using the graduated OpenCode ladder (exact →
+ * crlf-normalized → unicode-normalized → trailing-ws → line-trimmed with LCS
+ * line-ending preservation), rejecting identical/empty/ambiguous edits and
+ * attaching an actionable Spanish missHint on miss.
+ */
+function applyGraduatedEdit(current, oldStr, newStr, { replaceAll = false } = {}) {
+  if (oldStr === newStr) {
+    const err = new Error(ERRORS.validation_identical);
+    err.code = 'validation';
+    throw err;
+  }
+  if (!oldStr) {
+    const err = new Error(ERRORS.validation_old);
+    err.code = 'validation';
+    throw err;
+  }
+  const res = applyEdit(current, oldStr, newStr, { replaceAll });
+  if (!res.ok) {
+    if (res.reason === 'ambiguous') {
+      const err = new Error(ERRORS.edit_ambiguous);
+      err.code = 'edit_ambiguous';
+      throw err;
+    }
+    const err = new Error(ERRORS.edit_miss);
+    err.code = 'edit_miss';
+    if (res.hint) err.hint = res.hint;
+    throw err;
+  }
+  return {
+    text: res.next,
+    replacements: res.occurrences,
+    strategy: res.strategy,
+  };
+}
+
 function formatReadOutput(lines, { offset, totalLines, truncated, cut }) {
   const start = offset;
   const numbered = lines.map((line, i) => {
@@ -174,10 +243,11 @@ function formatReadOutput(lines, { offset, totalLines, truncated, cut }) {
 
 function mapFsError(err, fallbackCode, fallbackMessage) {
   if (!err) return toolError(fallbackCode, fallbackMessage);
-  if (err.code === 'ENOENT') return toolError('not_found', ERRORS.not_found);
-  if (err.code === 'EISDIR') return toolError('not_a_file', ERRORS.not_a_file);
-  if (ERRORS[err.code]) return toolError(err.code, err.message || ERRORS[err.code]);
-  return toolError(err.code || fallbackCode, err.message || fallbackMessage);
+  const extra = err.hint ? { hint: err.hint } : {};
+  if (err.code === 'ENOENT') return toolError('not_found', ERRORS.not_found, extra);
+  if (err.code === 'EISDIR') return toolError('not_a_file', ERRORS.not_a_file, extra);
+  if (ERRORS[err.code]) return toolError(err.code, err.message || ERRORS[err.code], extra);
+  return toolError(err.code || fallbackCode, err.message || fallbackMessage, extra);
 }
 
 async function resolveTarget(workspace, relPath) {
@@ -193,16 +263,107 @@ async function resolveTarget(workspace, relPath) {
   return jailRealPath(workspace.root, rel);
 }
 
-async function runRead(workspace, args) {
+async function findCanonicalAlternate(workspace, abs) {
+  const dir = path.dirname(abs);
+  if (!isInsideRoot(workspace.root, dir)) return null;
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const wanted = canonicalFileName(path.basename(abs));
+  const matches = entries.filter(
+    (entry) => entry.isFile() && !entry.isSymbolicLink() && canonicalFileName(entry.name) === wanted,
+  );
+  if (matches.length !== 1) return null;
+  const relDir = path.relative(workspace.root, dir).replace(/\\/g, '/');
+  const altRel = relDir && relDir !== '.' ? `${relDir}/${matches[0].name}` : matches[0].name;
+  try {
+    return { rel: altRel, abs: await resolveTarget(workspace, altRel) };
+  } catch {
+    return null;
+  }
+}
+
+async function diagnoseMissingWorkspaceFile(workspace, abs, requestedRel) {
+  const root = path.resolve(workspace.root);
+  const relPosix = String(requestedRel || '').replace(/\\/g, '/').replace(/^\.\/+/, '');
+  const parentAbs = path.dirname(abs);
+  const base = path.basename(abs);
+
+  const readDirNames = async (dirAbs) => {
+    if (!isInsideRoot(root, dirAbs)) return null;
+    try {
+      const entries = await fs.readdir(dirAbs, { withFileTypes: true });
+      return entries.filter((e) => e.name && !e.name.startsWith('.')).map((e) => e.name);
+    } catch {
+      return null;
+    }
+  };
+
+  const siblings = await readDirNames(parentAbs);
+  if (siblings !== null) {
+    const similar = suggestSimilarNames(siblings, base, 3);
+    const dirRel = path.posix.dirname(relPosix);
+    const suggestions = similar.map((entry) => (dirRel && dirRel !== '.' ? `${dirRel}/${entry}` : entry));
+    return {
+      suggestions,
+      hint: formatMissingPathHint({ suggestions }),
+    };
+  }
+
+  // Parent directory does not exist: walk upward within the workspace jail.
+  let childAbs = parentAbs;
+  let ancestorAbs = path.dirname(childAbs);
+  while (ancestorAbs !== childAbs && isInsideRoot(root, ancestorAbs)) {
+    // eslint-disable-next-line no-await-in-loop
+    const entries = await readDirNames(ancestorAbs);
+    if (entries !== null) {
+      const missingRel = path.relative(root, childAbs).replace(/\\/g, '/') || '.';
+      const nearestRel = path.relative(root, ancestorAbs).replace(/\\/g, '/') || '.';
+      const similar = suggestSimilarNames(entries, path.basename(childAbs), 3);
+      const suggestions = similar.map((entry) => (nearestRel !== '.' ? `${nearestRel}/${entry}` : entry));
+      return {
+        suggestions,
+        hint: formatMissingPathHint({
+          missingFolder: missingRel,
+          nearestFolder: nearestRel,
+          suggestions,
+        }),
+      };
+    }
+    if (ancestorAbs === root) break;
+    childAbs = ancestorAbs;
+    ancestorAbs = path.dirname(childAbs);
+  }
+
+  return { suggestions: [], hint: '' };
+}
+
+async function runRead(workspace, args, ctx = {}) {
   const rel = pickPath(args);
   if (!rel) return toolError('validation', ERRORS.validation_path);
   try {
-    const abs = await resolveTarget(workspace, rel);
+    let abs = await resolveTarget(workspace, rel);
+    let effectiveRel = rel;
     let st;
     try {
       st = await fs.lstat(abs);
     } catch (err) {
-      return mapFsError(err, 'not_found', ERRORS.not_found);
+      if (err && err.code === 'ENOENT') {
+        const alternate = await findCanonicalAlternate(workspace, abs);
+        if (alternate) {
+          abs = alternate.abs;
+          effectiveRel = alternate.rel;
+          st = await fs.lstat(abs);
+        } else {
+          const diag = await diagnoseMissingWorkspaceFile(workspace, abs, rel);
+          return toolError('not_found', ERRORS.not_found, diag);
+        }
+      } else {
+        return mapFsError(err, 'not_found', ERRORS.not_found);
+      }
     }
     if (st.isSymbolicLink()) {
       // resolveTarget already followed and jailed; lstat of the final path
@@ -215,7 +376,7 @@ async function runRead(workspace, args) {
     if (st.size > MAX_FILE_BYTES) return toolError('file_too_large', ERRORS.file_too_large);
 
     const buf = await fs.readFile(abs);
-    if (looksBinary(buf, rel)) return toolError('binary', ERRORS.binary);
+    if (looksBinary(buf, effectiveRel)) return toolError('binary', ERRORS.binary);
 
     const text = buf.toString('utf8');
     const allLines = text.split('\n');
@@ -231,13 +392,35 @@ async function runRead(workspace, args) {
     const start = offset - 1;
     const slice = allLines.slice(start, start + limit);
     const truncated = start + slice.length < totalLines;
-    const content = formatReadOutput(slice, {
+    let content = formatReadOutput(slice, {
       offset,
       totalLines,
       truncated,
       cut: false,
     });
-    const saved = path.relative(workspace.root, abs).replace(/\\/g, '/') || rel;
+    const saved = path.relative(workspace.root, abs).replace(/\\/g, '/') || effectiveRel;
+
+    // Best-effort hierarchical AGENTS.md / CLAUDE.md discovery (OpenCode read.ts).
+    let scopedPaths = [];
+    try {
+      const discovered = await discoverScopedInstructions({
+        targetRelPath: saved,
+        seenSet: seenInstructionsFor(ctx, workspace),
+        readFile: async (candidate) => {
+          const candAbs = await resolveTarget(workspace, candidate);
+          const candStat = await fs.lstat(candAbs);
+          if (candStat.isSymbolicLink() || !candStat.isFile() || candStat.size > MAX_FILE_BYTES) return null;
+          return fs.readFile(candAbs, 'utf8');
+        },
+      });
+      if (discovered.length > 0) {
+        scopedPaths = discovered.map((item) => item.path);
+        content = `${content}\n\n${formatScopedInstructionsBlock(discovered)}`;
+      }
+    } catch {
+      // Discovery failures never fail a read.
+    }
+
     return toolOk(content, {
       path: saved,
       text,
@@ -245,6 +428,7 @@ async function runRead(workspace, args) {
       limit: slice.length,
       totalLines,
       truncated,
+      ...(scopedPaths.length ? { scopedInstructions: scopedPaths } : {}),
     });
   } catch (err) {
     return mapFsError(err, 'read_failed', ERRORS.read_failed);
@@ -280,21 +464,22 @@ async function runEdit(workspace, args) {
   }
   const oldStr = String(oldRaw);
   const newStr = String(newRaw == null ? '' : newRaw);
+  if (oldStr === newStr) {
+    return toolError('validation', ERRORS.validation_identical);
+  }
   try {
     const { content: current, bytes } = await workspace.readFileForMutation(rel);
-    const ending = detectLineEnding(current);
-    const needle = applyLineEnding(oldStr, ending);
-    const replacement = applyLineEnding(newStr, ending);
-    const next = replaceUnique(current, needle, replacement, { replaceAll });
-    if (Buffer.byteLength(next, 'utf8') > MAX_FILE_BYTES) {
+    const applied = applyGraduatedEdit(current, oldStr, newStr, { replaceAll });
+    if (Buffer.byteLength(applied.text, 'utf8') > MAX_FILE_BYTES) {
       return toolError('file_too_large', ERRORS.file_too_large);
     }
-    const saved = await workspace.writeFileIfUnchanged(rel, next, bytes);
+    const saved = await workspace.writeFileIfUnchanged(rel, applied.text, bytes);
     return toolOk(`edited ${saved}`, {
       path: saved,
-      text: next,
+      text: applied.text,
       replaceAll,
-      replacements: replaceAll ? countOccurrences(current, needle) : 1,
+      replacements: applied.replacements,
+      strategy: applied.strategy,
     });
   } catch (err) {
     return mapFsError(err, 'edit_failed', ERRORS.edit_failed);
@@ -363,15 +548,12 @@ function normalizeEdits(args) {
 }
 
 function applyEditsInMemory(current, edits) {
-  const ending = detectLineEnding(current);
   let next = current;
   let replacements = 0;
   for (const edit of edits) {
-    const needle = applyLineEnding(edit.old_str, ending);
-    const replacement = applyLineEnding(edit.new_str, ending);
-    const before = next;
-    next = replaceUnique(next, needle, replacement, { replaceAll: edit.replaceAll });
-    replacements += edit.replaceAll ? countOccurrences(before, needle) : 1;
+    const applied = applyGraduatedEdit(next, edit.old_str, edit.new_str, { replaceAll: edit.replaceAll });
+    next = applied.text;
+    replacements += applied.replacements;
   }
   return { text: next, replacements };
 }
@@ -469,6 +651,7 @@ module.exports = {
   looksBinary,
   countOccurrences,
   replaceUnique,
+  applyGraduatedEdit,
   formatReadOutput,
   normalizeEdits,
   applyEditsInMemory,

@@ -52,7 +52,7 @@ const SUBAGENTS = {
   },
   frontend_builder: {
     description: 'Construye interfaces React + TypeScript de calidad producción: componentes, estados, estilos y navegación.',
-    tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'type_check'],
+    tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'apply_patch', 'type_check'],
     maxSteps: 10,
     effort: 'medium',
     systemPrompt: [
@@ -64,7 +64,7 @@ const SUBAGENTS = {
   },
   backend_engineer: {
     description: 'Diseña y escribe lógica de servidor, APIs y modelos de datos del proyecto.',
-    tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'run_command', 'inspect_database', 'type_check'],
+    tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'apply_patch', 'run_command', 'inspect_database', 'type_check'],
     maxSteps: 10,
     effort: 'medium',
     systemPrompt: [
@@ -76,7 +76,7 @@ const SUBAGENTS = {
   },
   db_architect: {
     description: 'Modela la base de datos: entidades, relaciones, tipos y esquema Prisma o modelos TypeScript.',
-    tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'inspect_database'],
+    tools: ['list_files', 'read_file', 'write_file', 'edit_file', 'apply_patch', 'inspect_database'],
     maxSteps: 8,
     effort: 'medium',
     systemPrompt: [
@@ -152,7 +152,7 @@ const SUBAGENTS = {
   },
   debugger: {
     description: 'Diagnostica y corrige errores REALES: lee la salida de tsc y los logs del dev server, encuentra la causa raíz con grep y aplica el fix mínimo.',
-    tools: ['list_files', 'read_file', 'grep_search', 'run_command', 'type_check', 'dev_server_check', 'edit_file', 'write_file'],
+    tools: ['list_files', 'read_file', 'grep_search', 'run_command', 'type_check', 'dev_server_check', 'edit_file', 'apply_patch', 'write_file'],
     maxSteps: 10,
     effort: 'high',
     systemPrompt: [
@@ -204,7 +204,7 @@ function validateCustomAgent(raw) {
     : 'medium';
   const model = String(raw.model || '').trim().slice(0, 160) || null;
   const readOnly = raw.readOnly === true;
-  const writeTools = new Set(['write_file', 'edit_file', 'run_command', 'install_dependencies', 'resolve_conflict']);
+  const writeTools = new Set(['write_file', 'edit_file', 'apply_patch', 'run_command', 'install_dependencies', 'resolve_conflict']);
   const effectiveTools = readOnly ? tools.filter((tool) => !writeTools.has(tool)) : tools;
   if (!effectiveTools.length) return { def: null, reason: `"${name}" no tiene herramientas válidas para readOnly` };
   return {

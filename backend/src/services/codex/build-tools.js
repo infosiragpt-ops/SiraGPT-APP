@@ -78,6 +78,53 @@ const PLAN_TASK_STATUSES = ['pending', 'in_progress', 'completed'];
 const MAX_DEPENDENCIES_PER_INSTALL = 20;
 const PACKAGE_SPEC_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:@(?:[~^]?\d+(?:\.\d+){0,2}(?:[-+][a-z0-9.-]+)?|latest|next|beta|alpha|canary|rc))?$/i;
 
+// Per-run cache for scoped AGENTS.md/CLAUDE.md discovery and workspace file
+// listings (OpenCode read.ts / instruction-discovery.ts adaptation).
+const runReadIntelScopes = new WeakMap();
+
+function getReadIntelScope(ctx) {
+  const key = (ctx && typeof ctx.signal === 'object' && ctx.signal)
+    || (ctx && typeof ctx.runner === 'object' && ctx.runner)
+    || null;
+  if (!key) return { seenInstructions: new Set(), filesByProject: new Map() };
+  let scope = runReadIntelScopes.get(key);
+  if (!scope) {
+    scope = { seenInstructions: new Set(), filesByProject: new Map() };
+    runReadIntelScopes.set(key, scope);
+  }
+  return scope;
+}
+
+async function listWorkspaceFilesCached(ctx, { refresh = false } = {}) {
+  const scope = getReadIntelScope(ctx);
+  const projectKey = String(ctx?.project || '');
+  if (!refresh && scope.filesByProject.has(projectKey)) {
+    return scope.filesByProject.get(projectKey);
+  }
+  let files = [];
+  if (ctx?.runner && typeof ctx.runner.exec === 'function') {
+    try {
+      const out = await ctx.runner.exec(
+        ctx.project,
+        ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+        { timeoutMs: 8_000, signal: ctx.signal },
+      );
+      if (out && out.exitCode === 0 && typeof out.stdout === 'string') {
+        files = out.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+      }
+    } catch {
+      files = [];
+    }
+  }
+  scope.filesByProject.set(projectKey, files);
+  return files;
+}
+
+function invalidateWorkspaceFilesCache(ctx) {
+  const scope = getReadIntelScope(ctx);
+  scope.filesByProject.delete(String(ctx?.project || ''));
+}
+
 /**
  * Validate + normalise an update_plan `tasks` argument into the plan_updated
  * payload shape `[{ id, title, status }]`. Returns null when the shape is
@@ -331,17 +378,91 @@ const TOOLS = {
         const totalLines = lineCount(content);
         const offset = Number.isFinite(Number(args.offset)) && Number(args.offset) > 1 ? Math.floor(Number(args.offset)) : 1;
         const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : 0;
+
+        // Hierarchical scoped AGENTS.md/CLAUDE.md discovery (OpenCode read.ts).
+        // Only reads candidates confirmed in the workspace file index so normal
+        // workspaces and mock runners pay zero extra readFile roundtrips.
+        let scopedSuffix = '';
+        let scopedInstructions = [];
+        const normalizedReadPath = String(args.path).replace(/\\/g, '/').replace(/^\.\/+/, '');
+        if (normalizedReadPath.includes('/')) {
+          try {
+            const knownFiles = await listWorkspaceFilesCached(ctx);
+            const instructionFiles = new Set(
+              knownFiles.filter((f) => /(?:^|\/)(?:AGENTS|CLAUDE)\.md$/.test(f)),
+            );
+            if (instructionFiles.size > 0) {
+              // eslint-disable-next-line global-require
+              const intel = require('./opencode-coding-intel');
+              const scope = getReadIntelScope(ctx);
+              const discovered = await intel.discoverScopedInstructions({
+                targetRelPath: normalizedReadPath,
+                seenSet: scope.seenInstructions,
+                readFile: async (candidate) => {
+                  if (!instructionFiles.has(candidate)) return null;
+                  const res = await ctx.runner.readFile(ctx.project, candidate);
+                  return typeof res?.content === 'string' ? res.content : null;
+                },
+              });
+              if (discovered.length > 0) {
+                scopedInstructions = discovered.map((item) => item.path);
+                scopedSuffix = `\n\n${intel.formatScopedInstructionsBlock(discovered)}`;
+              }
+            }
+          } catch {
+            // Instruction discovery never fails a file read.
+          }
+        }
+
         if (offset > 1 || limit) {
           const lines = content.split('\n');
           const slice = lines.slice(offset - 1, limit ? offset - 1 + limit : undefined);
           content = slice.join('\n');
           const header = `[líneas ${offset}-${offset - 1 + slice.length} de ${totalLines}]`;
           const linesRead = slice.length;
-          return { isError: false, summary: summarise(`${header}\n${content}`), linesRead, observation: `${header}\n${summarise(content, 8000)}` };
+          return {
+            isError: false,
+            summary: summarise(`${header}\n${content}`),
+            linesRead,
+            observation: `${header}\n${summarise(content, 8000)}${scopedSuffix}`,
+            ...(scopedInstructions.length ? { scopedInstructions } : {}),
+          };
         }
-        return { isError: false, summary: summarise(content), linesRead: totalLines, observation: summarise(content, 8000) };
+        return {
+          isError: false,
+          summary: summarise(content),
+          linesRead: totalLines,
+          observation: `${summarise(content, 8000)}${scopedSuffix}`,
+          ...(scopedInstructions.length ? { scopedInstructions } : {}),
+        };
       } catch (err) {
-        return { isError: true, summary: `no se pudo leer: ${err.message}`, observation: `Error leyendo ${args.path}: ${err.message}` };
+        let missingHint = '';
+        let suggestions = [];
+        try {
+          const isMissing = err?.status === 404
+            || err?.code === 'ENOENT'
+            || err?.body?.error === 'file_not_found'
+            || /not[_\s]?found|ENOENT|no existe/i.test(String(err?.message || ''));
+          if (isMissing) {
+            const knownFiles = await listWorkspaceFilesCached(ctx);
+            if (knownFiles.length > 0) {
+              // eslint-disable-next-line global-require
+              const intel = require('./opencode-coding-intel');
+              const diag = intel.diagnoseMissingPath(args.path, knownFiles);
+              suggestions = diag.suggestions;
+              missingHint = intel.formatMissingPathHint(diag);
+            }
+          }
+        } catch {
+          // Best-effort diagnostics only.
+        }
+        const baseObs = `Error leyendo ${args.path}: ${err.message}`;
+        return {
+          isError: true,
+          summary: `no se pudo leer: ${err.message}`,
+          observation: missingHint ? `${baseObs}\n\n${missingHint}` : baseObs,
+          ...(suggestions.length ? { suggestions } : {}),
+        };
       }
     },
   },
@@ -537,6 +658,7 @@ const TOOLS = {
           }
         }
         await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: args.content }]);
+        invalidateWorkspaceFilesCache(ctx);
         // A successful write becomes the new known state for follow-up edits in
         // the same run. This does not waive read-before-edit for other runs.
         // eslint-disable-next-line global-require
@@ -590,25 +712,193 @@ const TOOLS = {
             };
           }
         }
-        // Graduated match ladder (edit-matching.js): exact byte match first;
-        // if the model quoted the fragment with drifted indentation, a UNIQUE
-        // line-trimmed window still lands the edit (re-indented to the file).
+        // Graduated match ladder (edit-matching.js): exact byte match first,
+        // then CRLF/unicode/trailing-ws normalization with LCS line-ending
+        // preservation, and finally a UNIQUE line-trimmed window re-indented
+        // to the file. On miss, returns actionable closest-lines / already-applied hint.
         // eslint-disable-next-line global-require
         const { applyEdit } = require('./edit-matching');
         const result = applyEdit(content, args.find, args.replace, { replaceAll: !!args.replaceAll });
         if (!result.ok) {
           if (result.reason === 'ambiguous') {
-            return { isError: true, summary: `find ambiguo (${result.occurrences} apariciones) en ${args.path}`, observation: `Error: \`find\` aparece ${result.occurrences} veces en ${args.path}${result.strategy === 'line-trimmed' ? ' (comparando líneas sin indentación)' : ''}. Amplía \`find\` con líneas de contexto para hacerlo único${result.strategy === 'exact' ? ', o pasa replaceAll:true para reemplazar todas' : ''}.` };
+            const allowReplaceAll = result.strategy !== 'line-trimmed';
+            return {
+              isError: true,
+              summary: `find ambiguo (${result.occurrences} apariciones) en ${args.path}`,
+              observation: `Error: \`find\` aparece ${result.occurrences} veces en ${args.path}${result.strategy === 'line-trimmed' ? ' (comparando líneas sin indentación)' : ''}. Amplía \`find\` con líneas de contexto para hacerlo único${allowReplaceAll ? ', o pasa replaceAll:true para reemplazar todas' : ''}.`,
+            };
           }
-          return { isError: true, summary: `texto a reemplazar no encontrado en ${args.path}`, observation: `Error: el texto a reemplazar no existe en ${args.path} (ni exacto ni por líneas). Lee el archivo con read_file y copia el fragmento real.` };
+          const baseMiss = `Error: el texto a reemplazar no existe en ${args.path} (ni exacto ni por líneas). Lee el archivo con read_file y copia el fragmento real.`;
+          return {
+            isError: true,
+            summary: `texto a reemplazar no encontrado en ${args.path}`,
+            observation: result.hint ? `${baseMiss}\n\n${result.hint}` : baseMiss,
+            ...(result.hint ? { hint: result.hint } : {}),
+          };
         }
         await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: result.next }]);
         fileState.markWritten(args.path, result.next);
         const n = result.occurrences;
-        const via = result.strategy === 'line-trimmed' ? ' — coincidencia por líneas, indentación del archivo conservada' : '';
+        const via = result.strategy === 'line-trimmed'
+          ? ' — coincidencia por líneas, indentación del archivo conservada'
+          : result.strategy === 'unicode-normalized'
+            ? ' — coincidencia tipográfica normalizada'
+            : result.strategy === 'trailing-ws'
+              ? ' — coincidencia tolerando espacios finales'
+              : result.strategy === 'crlf-normalized'
+                ? ' — saltos de línea del archivo conservados'
+                : '';
         return { isError: false, summary: `editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'})`, observation: `OK: editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'}${via}).` };
       } catch (err) {
         return { isError: true, summary: `no se pudo editar: ${err.message}`, observation: `Error editando ${args.path}: ${err.message}` };
+      }
+    },
+  },
+
+  apply_patch: {
+    kind: 'file_write',
+    description: 'Aplica un parche multi-archivo estilo OpenCode entre `*** Begin Patch` y `*** End Patch`. Soporta `*** Add File: <ruta>` (líneas con `+`), `*** Update File: <ruta>` (opcional `*** Move to: <ruta>`, hunks con `@@ [contexto]`, líneas ` `/`+`/`-`, opcional `*** End of File`) y `*** Delete File: <ruta>`. Verifica TODOS los archivos y hunks antes de escribir (si uno falla, no modifica ninguno). Exige haber leído los archivos existentes antes de actualizarlos.',
+    parameters: {
+      type: 'object',
+      properties: {
+        patch: {
+          type: 'string',
+          description: 'Parche completo con `*** Begin Patch` ... `*** End Patch`.',
+        },
+      },
+      required: ['patch'],
+    },
+    commandFor: () => 'apply_patch',
+    pathFor: (args) => {
+      const raw = String(args?.patch || args?.patchText || args?.diff || '');
+      const matches = [...raw.matchAll(/^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s+(.+)$/gm)].map((m) => m[1].trim());
+      return matches.length === 1 ? matches[0] : null;
+    },
+    async execute(args, ctx) {
+      const patchText = String(args?.patch || args?.patchText || args?.diff || '').trim();
+      if (!patchText) {
+        return { isError: true, summary: 'patch requerido', observation: 'Error: `patch` es requerido (usa `*** Begin Patch` ... `*** End Patch`).' };
+      }
+      try {
+        // eslint-disable-next-line global-require
+        const { planPatchOperations } = require('../sira-code/apply-patch');
+        // eslint-disable-next-line global-require
+        const fileStateModule = require('./file-state');
+        const fileState = fileStateModule.trackerForContext(ctx);
+        const enforceState = fileStateModule.shouldEnforceFileState(ctx);
+
+        const plan = await planPatchOperations(patchText, {
+          normalizePath: fileStateModule.normalizeWorkspacePath,
+          readFile: async (rel) => {
+            try {
+              const out = await ctx.runner.readFile(ctx.project, rel);
+              return typeof out?.content === 'string' ? out.content : '';
+            } catch (readErr) {
+              const missing = readErr?.status === 404
+                || readErr?.code === 'ENOENT'
+                || readErr?.body?.error === 'file_not_found'
+                || /file_not_found|ENOENT/i.test(String(readErr?.message || ''));
+              if (missing) return null;
+              throw readErr;
+            }
+          },
+          checkExistingForUpdate: (rel, current) => {
+            if (!enforceState) return;
+            const state = fileState.checkEdit(rel, current);
+            if (state.ok) return;
+            if (state.reason === 'not_read') {
+              const err = new Error(`read-before-edit. Lee ${rel} con read_file antes de parchearlo.`);
+              err.code = 'not_read';
+              throw err;
+            }
+            if (state.reason === 'changed_since_read') {
+              fileState.forget(rel);
+              const err = new Error(`${rel} cambió desde la última lectura. Vuelve a leerlo con read_file antes de aplicar el parche.`);
+              err.code = 'changed_since_read';
+              throw err;
+            }
+            const err = new Error(`la ruta ${rel} no es una ruta relativa segura del workspace.`);
+            err.code = 'unsafe_path';
+            throw err;
+          },
+        });
+
+        // Detect case-only renames (e.g. Foo.ts -> foo.ts) so case-insensitive
+        // filesystems never delete the file after writing it.
+        const caseOnlyRenames = [];
+        const caseOnlySourceSet = new Set();
+        const caseOnlyDestToSource = new Map();
+        for (const item of plan.summary) {
+          if (item.type === 'move' && item.path.toLowerCase() === item.moveTo.toLowerCase() && item.path !== item.moveTo) {
+            caseOnlyRenames.push({ from: item.path, to: item.moveTo });
+            caseOnlySourceSet.add(item.path);
+            caseOnlyDestToSource.set(item.moveTo, item.path);
+          }
+        }
+
+        const effectiveWrites = plan.writes.map((file) => {
+          const recasedSource = caseOnlyDestToSource.get(file.path);
+          return recasedSource ? { path: recasedSource, content: file.content } : file;
+        });
+        const effectiveDeletes = plan.deletes.filter((p) => !caseOnlySourceSet.has(p));
+
+        if (effectiveWrites.length > 0) {
+          await ctx.runner.writeFiles(ctx.project, effectiveWrites);
+        }
+        if (caseOnlyRenames.length > 0 && typeof ctx.runner.exec === 'function') {
+          const renameArgs = caseOnlyRenames.flatMap((pair) => [pair.from, pair.to]);
+          const renamed = await ctx.runner.exec(
+            ctx.project,
+            ['node', '-e', 'const fs=require("fs");const a=process.argv.slice(1);for(let i=0;i<a.length;i+=2){fs.renameSync(a[i],a[i+1]);}', ...renameArgs],
+            { timeoutMs: 15_000, signal: ctx.signal },
+          );
+          if (renamed && renamed.exitCode !== 0) {
+            throw new Error(`no se pudo renombrar archivo: ${summarise(renamed.stderr || renamed.stdout, 400)}`);
+          }
+        }
+        if (effectiveDeletes.length > 0) {
+          if (typeof ctx.runner.deleteFile === 'function') {
+            for (const target of effectiveDeletes) {
+              // eslint-disable-next-line no-await-in-loop
+              await ctx.runner.deleteFile(ctx.project, target);
+            }
+          } else if (typeof ctx.runner.exec === 'function') {
+            const removed = await ctx.runner.exec(
+              ctx.project,
+              ['node', '-e', 'const fs=require("fs");for(const p of process.argv.slice(1)){try{fs.unlinkSync(p)}catch(e){if(e.code!=="ENOENT")throw e}}', ...effectiveDeletes],
+              { timeoutMs: 15_000, signal: ctx.signal },
+            );
+            if (removed && removed.exitCode !== 0) {
+              throw new Error(`no se pudo eliminar archivo: ${summarise(removed.stderr || removed.stdout, 400)}`);
+            }
+          }
+        }
+
+        invalidateWorkspaceFilesCache(ctx);
+        for (const deleted of plan.deletes) fileState.forget(deleted);
+        for (const written of plan.writes) fileState.markWritten(written.path, written.content);
+
+        const lines = plan.summary.map((item) => {
+          if (item.type === 'add') return `A ${item.path}`;
+          if (item.type === 'delete') return `D ${item.path}`;
+          if (item.type === 'move') return `R ${item.path} -> ${item.moveTo}`;
+          return `M ${item.path}`;
+        });
+        const touched = [...new Set(plan.summary.map((item) => (item.type === 'move' ? item.moveTo : item.path)))];
+        return {
+          isError: false,
+          summary: `parche aplicado (${lines.length} operación${lines.length === 1 ? '' : 'es'})`,
+          observation: `OK: parche aplicado en los siguientes archivos:\n${lines.join('\n')}`,
+          paths: touched,
+          operations: lines,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          summary: `apply_patch falló: ${err.message}`,
+          observation: `Error aplicando parche (ningún archivo fue modificado): ${err.message}`,
+          ...(err.hint ? { hint: err.hint } : {}),
+        };
       }
     },
   },

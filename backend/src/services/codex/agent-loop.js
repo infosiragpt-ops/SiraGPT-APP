@@ -1291,9 +1291,12 @@ async function safeFileTree(runner, projectId) {
 }
 
 /**
- * Project memory (CLAUDE.md pattern): root SIRA.md is the durable instruction
- * file and `.sira/notes.md` is the compact operational notebook. Both are
- * loaded on every run so a new session inherits conventions immediately.
+ * Project memory (SIRA.md + OpenCode AGENTS.md/CLAUDE.md hierarchy):
+ * root SIRA.md is SiraGPT's durable instruction file, root AGENTS.md (falling
+ * back to CLAUDE.md when AGENTS.md is absent, per OpenCode preferAgents)
+ * provides repository instructions, and `.sira/notes.md` is the compact
+ * operational notebook. Loaded on every run so a new session inherits
+ * conventions immediately.
  */
 async function safeProjectNotes(runner, projectId) {
   const read = async (path) => {
@@ -1304,11 +1307,18 @@ async function safeProjectNotes(runner, projectId) {
       return '';
     }
   };
-  const [instructions, notes] = await Promise.all([read('SIRA.md'), read('.sira/notes.md')]);
-  if (!instructions) return notes.slice(0, 2400);
+  const [siraMd, agentsMd, notes] = await Promise.all([
+    read('SIRA.md'),
+    read('AGENTS.md'),
+    read('.sira/notes.md'),
+  ]);
+  const repoInstrName = agentsMd ? 'AGENTS.md' : 'CLAUDE.md';
+  const repoInstr = agentsMd || (await read('CLAUDE.md'));
+  if (!siraMd && !repoInstr) return notes.slice(0, 2400);
   const sections = [];
-  if (instructions) sections.push(`## SIRA.md\n${instructions.slice(0, 5000)}`);
-  if (notes) sections.push(`## .sira/notes.md\n${notes.slice(0, 3000)}`);
+  if (siraMd) sections.push(`## SIRA.md\n${siraMd.slice(0, 4200)}`);
+  if (repoInstr) sections.push(`## ${repoInstrName}\n${repoInstr.slice(0, siraMd ? 2400 : 4800)}`);
+  if (notes) sections.push(`## .sira/notes.md\n${notes.slice(0, 2400)}`);
   return sections.join('\n\n').slice(0, 8000);
 }
 
@@ -2529,7 +2539,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       // Writes are always on the sequential (non-delegation) path, so mutating
       // this state here is race-free.
       let thrashNudge = '';
-      if (!result.isError && (call.name === 'write_file' || call.name === 'edit_file') && path) {
+      if (!result.isError && (call.name === 'write_file' || call.name === 'edit_file' || call.name === 'apply_patch') && path) {
         if (path === lastWritePath) sameWriteRun += 1;
         else { lastWritePath = path; sameWriteRun = 1; }
         const total = (writeTotals.get(path) || 0) + 1;

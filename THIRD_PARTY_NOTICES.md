@@ -205,6 +205,28 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   the entire historical vendor tree. Evidence and limitations are recorded
   in `docs/operations/OPENCODE_FILE_MUTATIONS.md`.
 
+  Coding-engine recovery, multi-file patching, fuzzy path diagnosis,
+  hierarchical instruction discovery and staged compaction draw on
+  `anomalyco/opencode@4cf9db957485dd51a5b195fb6e2c1e03d8da1107` (MIT,
+  Copyright (c) 2025 opencode), specifically:
+  `packages/core/src/tool/plugin/edit.ts` (typographic normalization,
+  LCS region-aware LF/CRLF ending preservation, actionable `missHint`),
+  `packages/util/src/patch.ts` + `packages/core/src/tool/plugin/patch.ts`
+  (heredoc stripping, `@@ [context]` seeking, `*** End of File`, 4-tier
+  fuzzy `seek`, BOM preservation, two-phase pre-verification, case-only
+  rename handling), `packages/core/src/tool/plugin/read.ts` +
+  `packages/core/src/instruction-discovery.ts` (canonical look-alike
+  recovery, 4-tier Levenshtein path suggestions, missing-parent diagnosis,
+  hierarchical `AGENTS.md`/`CLAUDE.md` discovery with `preferAgents`), and
+  `packages/core/src/session/compaction.ts` (staged exchange-level
+  compaction preserving system prefix and newest exchange). Adapted
+  natively in CommonJS inside
+  `backend/src/services/codex/{opencode-coding-intel,edit-matching,build-tools,tool-scheduler,opencode-harness,agent-loop}.js`,
+  `backend/src/services/codex/agent-sdk/index.js`, and
+  `backend/src/services/sira-code/{apply-patch,file-tools,tool-result}.js`.
+  Zero Effect-TS/Bun runtime, credentials, telemetry or UI files were
+  copied or altered.
+
 - **Simple Icons** (https://simpleicons.org/, CC0 1.0) — brand-colored SVGs
   under `public/conexiones-logos/` used as official marks on `/conexiones`
   and `/gpts` app cards.
